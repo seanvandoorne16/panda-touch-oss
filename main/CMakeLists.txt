@@ -33,6 +33,6 @@ idf_component_register(
         spiffs
         json
         lvgl
-        esp_http_client
+        esp_tls
         esp_sntp
 )

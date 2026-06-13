@@ -129,6 +129,8 @@ void WifiManager::on_event(esp_event_base_t base, int32_t id, void* data) {
         char ip_str[16];
         esp_ip4addr_ntoa(&ev->ip_info.ip, ip_str, sizeof(ip_str));
         _retry = 0;
+        // Modem sleep reduces WiFi power ~20 mA while keeping the connection alive
+        esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
         ESP_LOGI(TAG, "Connected, IP: %s", ip_str);
         set_state(WifiState::CONNECTED, ip_str);
     }

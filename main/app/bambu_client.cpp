@@ -139,16 +139,20 @@ void BambuClient::parse_report(const char* payload, int len) {
     cJSON* root = cJSON_ParseWithLength(payload, len);
     if (!root) return;
 
+    bool changed = false;
     {
         std::lock_guard<std::mutex> lock(_state_mutex);  // FIX C5
         cJSON* print = cJSON_GetObjectItem(root, "print");
-        if (print) parse_print(print);
+        if (print) { parse_print(print); changed = true; }
         cJSON* ams = cJSON_GetObjectItem(root, "ams");
-        if (ams) parse_ams(ams);
+        if (ams) { parse_ams(ams); changed = true; }
         _state.last_seen_ms = esp_timer_get_time() / 1000;
     }
 
     cJSON_Delete(root);
+
+    // Skip UI notification for heartbeat messages that carry no print/ams state
+    if (!changed) return;
 
     PrinterState snap = state();
     for (auto& cb : _callbacks) cb(snap);

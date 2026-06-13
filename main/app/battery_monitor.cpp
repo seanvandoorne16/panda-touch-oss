@@ -26,9 +26,19 @@ esp_err_t BatteryMonitor::init(int adc_gpio, int charge_detect_gpio) {
     io.pull_up_en   = GPIO_PULLUP_ENABLE;
     gpio_config(&io);
 
+    // FIX H5: map GPIO to ADC unit+channel at runtime, not hardcoded
+    adc_unit_t unit_id;
+    adc_channel_t chan;
+    if (adc_oneshot_io_to_channel(adc_gpio, &unit_id, &chan) != ESP_OK) {
+        ESP_LOGE(TAG, "GPIO%d is not an ADC-capable pin", adc_gpio);
+        return ESP_ERR_INVALID_ARG;
+    }
+    _adc_channel = (int)chan;
+    _adc_unit_id = (int)unit_id;
+
     // ADC oneshot init
     adc_oneshot_unit_init_cfg_t unit_cfg = {};
-    unit_cfg.unit_id = ADC_UNIT_1;
+    unit_cfg.unit_id = unit_id;
 
     adc_oneshot_unit_handle_t* handle =
         reinterpret_cast<adc_oneshot_unit_handle_t*>(&_adc_unit);
@@ -38,8 +48,6 @@ esp_err_t BatteryMonitor::init(int adc_gpio, int charge_detect_gpio) {
     chan_cfg.bitwidth = ADC_BITWIDTH_12;
     chan_cfg.atten    = ADC_ATTEN_DB_12;   // 0-3.9 V range
 
-    // GPIO4 → ADC1 channel 3 on ESP32-S3 (adjust per schematic)
-    adc_channel_t chan = ADC_CHANNEL_3;
     adc_oneshot_chan_handle_t* ch_handle =
         reinterpret_cast<adc_oneshot_chan_handle_t*>(&_adc_chan);
     ESP_ERROR_CHECK(adc_oneshot_config_channel(
@@ -58,7 +66,7 @@ void BatteryMonitor::update() {
     int sum = 0;
     for (int i = 0; i < 8; i++) {
         int raw = 0;
-        adc_oneshot_read(*handle, ADC_CHANNEL_3, &raw);
+        adc_oneshot_read(*handle, (adc_channel_t)_adc_channel, &raw);
         sum += raw;
     }
     int raw_avg = sum / 8;
