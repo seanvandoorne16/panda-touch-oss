@@ -5,17 +5,30 @@
 #include "config_manager.hpp"
 #include "wifi_manager.hpp"
 #include "battery_monitor.hpp"
+#include "sleep_manager.hpp"
+#include "clock_manager.hpp"
 #include "ui_manager.hpp"
 #include "screen_wifi.hpp"
 #include "screen_home.hpp"
 
 static const char* TAG = "main";
 
-// LVGL tick task — runs every 5 ms
+// Global brightness — used by sleep_manager to restore after wake
+extern uint8_t g_brightness;
+
+// LVGL tick + sleep tick task — runs every 5 ms on core 1
 static void lvgl_task(void*) {
+    uint32_t sleep_counter = 0;
     for (;;) {
         lv_tick_inc(5);
         UiManager::instance().tick();
+
+        // Tick sleep manager every 1 second
+        if (++sleep_counter >= 200) {
+            sleep_counter = 0;
+            SleepManager::instance().tick();
+        }
+
         vTaskDelay(pdMS_TO_TICKS(5));
     }
 }
@@ -28,44 +41,52 @@ extern "C" void app_main(void) {
 
     // 2. Display + touch
     ESP_ERROR_CHECK(UiManager::instance().init());
-    uint8_t brt = ConfigManager::instance().get_brightness();
-    UiManager::instance().set_brightness(brt);
+    g_brightness = ConfigManager::instance().get_brightness();
+    UiManager::instance().set_brightness(g_brightness);
 
     // 3. Battery monitor
     ESP_ERROR_CHECK(BatteryMonitor::instance().init(
         pins::BAT_ADC, pins::BAT_CHG));
 
-    // 4. WiFi
+    // 4. Sleep manager (fixes crash-on-wake #228/#260/#328)
+    //    — uses backlight dim only, never deep sleep
+    ESP_ERROR_CHECK(SleepManager::instance().init());
+    SleepManager::instance().set_idle_timeout_sec(
+        ConfigManager::instance().get_sleep_sec());
+    SleepManager::instance().set_print_timeout_sec(0); // never during print
+
+    // 5. WiFi
     ESP_ERROR_CHECK(WifiManager::instance().init());
 
-    // 5. LVGL task (core 1 to avoid contention with WiFi on core 0)
+    // 6. SNTP clock (fixes issue #196) — starts after WiFi connects
+    WifiManager::instance().on_state_change([](WifiState s, const std::string&) {
+        if (s == WifiState::CONNECTED) {
+            ClockManager::instance().init();
+        } else if (s == WifiState::FAILED) {
+            ESP_LOGW(TAG, "WiFi failed, showing setup screen");
+            UiManager::instance().lock();
+            ScreenWifi::create();
+            UiManager::instance().unlock();
+        }
+    });
+
+    // 7. LVGL task (core 1)
     xTaskCreatePinnedToCore(lvgl_task, "lvgl", 8192, nullptr, 5, nullptr, 1);
 
-    // 6. Decide first screen
+    // 8. Decide first screen
     WifiConfig wifi = ConfigManager::instance().get_wifi();
     if (wifi.ssid.empty()) {
-        // First boot — show WiFi setup
         UiManager::instance().lock();
         ScreenWifi::create();
         UiManager::instance().unlock();
     } else {
-        // Try to connect to saved network, show home immediately
         WifiManager::instance().connect(wifi.ssid, wifi.password);
-        WifiManager::instance().on_state_change([](WifiState s, const std::string& ip) {
-            if (s == WifiState::FAILED) {
-                ESP_LOGW(TAG, "WiFi failed, showing setup screen");
-                UiManager::instance().lock();
-                ScreenWifi::create();
-                UiManager::instance().unlock();
-            }
-        });
-
         UiManager::instance().lock();
         ScreenHome::create();
         UiManager::instance().unlock();
     }
 
-    // Main loop — nothing to do here; LVGL runs in its own task
+    // Main loop
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(1000));
     }

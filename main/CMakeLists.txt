@@ -5,10 +5,16 @@ idf_component_register(
         "app/wifi_manager.cpp"
         "app/bambu_client.cpp"
         "app/battery_monitor.cpp"
+        "app/sleep_manager.cpp"
+        "app/clock_manager.cpp"
+        "app/thumbnail_fetcher.cpp"
         "ui/ui_manager.cpp"
         "ui/screen_wifi.cpp"
         "ui/screen_home.cpp"
         "ui/screen_printer.cpp"
+        "ui/screen_ams.cpp"
+        "ui/screen_settings.cpp"
+        "ui/screen_screensaver.cpp"
     INCLUDE_DIRS
         "."
         "app"
@@ -27,4 +33,6 @@ idf_component_register(
         spiffs
         json
         lvgl
+        esp_http_client
+        esp_sntp
 )
