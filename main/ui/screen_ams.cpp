@@ -1,5 +1,6 @@
 #include "screen_ams.hpp"
 #include "screen_printer.hpp"
+#include "screen_home.hpp"
 #include "ui_manager.hpp"
 #include "esp_log.h"
 #include <cstdio>
@@ -171,8 +172,10 @@ void ScreenAms::refresh(const PrinterState& state) {
 
 void ScreenAms::destroy() {
     s_slot_cards.clear();
-    s_client = nullptr;
     if (s_screen) { lv_obj_del(s_screen); s_screen = nullptr; }
-    // Go back to printer screen
-    if (s_client) ScreenPrinter::show(s_client);
+    // FIX C3: capture client before clearing, then navigate
+    auto client = std::move(s_client);
+    s_client = nullptr;
+    if (client) ScreenPrinter::show(client);
+    else        ScreenHome::create();
 }

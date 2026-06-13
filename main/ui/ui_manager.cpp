@@ -1,4 +1,5 @@
 #include "ui_manager.hpp"
+#include "sleep_manager.hpp"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_rgb.h"
 #include "esp_lcd_touch_gt911.h"
@@ -154,6 +155,9 @@ void UiManager::lvgl_touch_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
     esp_lcd_touch_read_data(touch);
     bool pressed = esp_lcd_touch_get_coordinates(touch, &x, &y, &strength, &count, 1)
                    && count > 0;
+    if (pressed) {
+        SleepManager::instance().touch_activity();  // FIX H2: wake on any touch
+    }
     data->state   = pressed ? LV_INDEV_STATE_PR : LV_INDEV_STATE_REL;
     data->point.x = x;
     data->point.y = y;
@@ -186,7 +190,7 @@ esp_err_t UiManager::init_lvgl() {
     indev_drv.user_data = _touch;
     lv_indev_drv_register(&indev_drv);
 
-    _mutex = xSemaphoreCreateMutex();
+    _mutex = xSemaphoreCreateRecursiveMutex();  // FIX C1: recursive to allow re-entry from nested create() calls
     return ESP_OK;
 }
 
@@ -205,9 +209,9 @@ void UiManager::tick() {
 }
 
 void UiManager::lock() {
-    xSemaphoreTake((SemaphoreHandle_t)_mutex, portMAX_DELAY);
+    xSemaphoreTakeRecursive((SemaphoreHandle_t)_mutex, portMAX_DELAY);  // FIX C1
 }
 
 void UiManager::unlock() {
-    xSemaphoreGive((SemaphoreHandle_t)_mutex);
+    xSemaphoreGiveRecursive((SemaphoreHandle_t)_mutex);  // FIX C1
 }

@@ -109,14 +109,17 @@ static lv_obj_t* create_printer_card(lv_obj_t* parent, const PrinterConfig& cfg)
     lv_obj_set_style_text_color(prog_lbl, lv_palette_lighten(LV_PALETTE_GREY, 1), 0);
     lv_obj_align(prog_lbl, LV_ALIGN_BOTTOM_LEFT, 0, 0);
 
-    // Tap → printer detail screen
+    // FIX C4: stable heap-allocated serial key — cfg.serial.c_str() would dangle
+    auto* serial_key = new std::string(cfg.serial);
     lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(card, [](lv_event_t* e) {
-        auto* serial = (const char*)lv_event_get_user_data(e);
-        if (s_clients.count(serial)) {
-            ScreenPrinter::show(s_clients[serial]);
-        }
-    }, LV_EVENT_CLICKED, (void*)cfg.serial.c_str());
+        auto* serial = static_cast<std::string*>(lv_event_get_user_data(e));
+        auto it = s_clients.find(*serial);
+        if (it != s_clients.end()) ScreenPrinter::show(it->second);
+    }, LV_EVENT_CLICKED, serial_key);
+    lv_obj_add_event_cb(card, [](lv_event_t* e) {
+        delete static_cast<std::string*>(lv_event_get_user_data(e));
+    }, LV_EVENT_DELETE, serial_key);
 
     return card;
 }
@@ -153,6 +156,7 @@ void ScreenHome::refresh_printer(const PrinterState& state) {
 }
 
 void ScreenHome::create() {
+    if (s_screen) destroy();  // FIX H1: prevent screen + MQTT client leak on re-entry
     s_screen = lv_obj_create(nullptr);
     lv_obj_set_style_bg_color(s_screen, lv_color_hex(0x0d0d0d), 0);
     lv_obj_clear_flag(s_screen, LV_OBJ_FLAG_SCROLLABLE);
@@ -234,8 +238,8 @@ void ScreenHome::create() {
             s_cards[cfg.serial] = card;
 
             // Connect MQTT
-            auto client = std::make_shared<BambuClient>(cfg.serial, cfg.ip, cfg.access_code);
-            client->on_update([](const PrinterState& st) {
+            auto client = std::make_shared<BambuClient>(cfg.serial, cfg.ip, cfg.access_code, cfg.name);
+            client->add_update_listener([](const PrinterState& st) {
                 UiManager::instance().lock();
                 ScreenHome::refresh_printer(st);
                 UiManager::instance().unlock();

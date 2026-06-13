@@ -8,43 +8,45 @@
 
 static const char* TAG = "bambu";
 
-// Bambu printers use self-signed TLS — skip server cert verification
-// (same as official Bambu Studio behaviour on LAN)
-static const char* BAMBU_TLS_SKIP = nullptr;
-
 BambuClient::BambuClient(const std::string& serial,
                          const std::string& ip,
-                         const std::string& access_code)
+                         const std::string& access_code,
+                         const std::string& name)  // FIX M2: accept name
     : _serial(serial), _ip(ip), _access_code(access_code)
 {
+    _client_id     = "pt_" + serial;   // FIX C2: stable storage (no dangling ptr)
     _report_topic  = "device/" + serial + "/report";
     _request_topic = "device/" + serial + "/request";
     _state.serial  = serial;
     _state.ip      = ip;
+    _state.name    = name;             // FIX M2: populate name
 }
 
 BambuClient::~BambuClient() {
     disconnect();
 }
 
+void BambuClient::add_update_listener(PrinterStateCallback cb) {
+    _callbacks.push_back(std::move(cb));
+}
+
 esp_err_t BambuClient::connect() {
     std::string uri = "mqtts://" + _ip + ":8883";
 
     esp_mqtt_client_config_t cfg = {};
-    cfg.broker.address.uri            = uri.c_str();
+    cfg.broker.address.uri = uri.c_str();
     cfg.broker.verification.skip_cert_common_name_check = true;
     cfg.broker.verification.use_global_ca_store         = false;
-    // Bambu uses self-signed cert; disable verification (LAN-only use)
     cfg.broker.verification.certificate                 = nullptr;
 
-    cfg.credentials.username          = "bblp";
-    cfg.credentials.authentication.password = _access_code.c_str();
-    cfg.credentials.client_id         = ("pt_" + _serial).c_str();
+    cfg.credentials.username                       = "bblp";
+    cfg.credentials.authentication.password        = _access_code.c_str();
+    cfg.credentials.client_id                      = _client_id.c_str(); // FIX C2
 
-    cfg.session.keepalive             = 10;
-    cfg.network.reconnect_timeout_ms  = 5000;
-    cfg.network.timeout_ms            = 10000;
-    cfg.task.stack_size               = 8192;
+    cfg.session.keepalive            = 10;
+    cfg.network.reconnect_timeout_ms = 5000;
+    cfg.network.timeout_ms           = 10000;
+    cfg.task.stack_size              = 8192;
 
     _mqtt_handle = esp_mqtt_client_init(&cfg);
     if (!_mqtt_handle) return ESP_FAIL;
@@ -68,7 +70,7 @@ void BambuClient::disconnect() {
 
 // ── MQTT events ───────────────────────────────────────────────────────────────
 
-void BambuClient::mqtt_event_handler(void* arg, esp_event_base_t base,
+void BambuClient::mqtt_event_handler(void* arg, esp_event_base_t,
                                       int32_t id, void* data) {
     reinterpret_cast<BambuClient*>(arg)->on_mqtt_event(id, data);
 }
@@ -79,35 +81,40 @@ void BambuClient::on_mqtt_event(int32_t id, void* data) {
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI(TAG, "[%s] Connected", _serial.c_str());
             _connected = true;
-            _state.online = true;
+            {
+                std::lock_guard<std::mutex> lock(_state_mutex);
+                _state.online = true;
+            }
             esp_mqtt_client_subscribe(
                 (esp_mqtt_client_handle_t)_mqtt_handle,
                 _report_topic.c_str(), 0);
-
-            // Request full status immediately after connect
             publish("{\"pushing\":{\"sequence_id\":\"0\",\"command\":\"pushall\"}}");
             break;
 
         case MQTT_EVENT_DISCONNECTED:
             ESP_LOGW(TAG, "[%s] Disconnected", _serial.c_str());
-            _connected    = false;
-            _state.online = false;
-            _state.status = PrinterStatus::OFFLINE;
-            if (_callback) _callback(_state);
+            _connected = false;
+            {
+                std::lock_guard<std::mutex> lock(_state_mutex);
+                _state.online = false;
+                _state.status = PrinterStatus::OFFLINE;
+            }
+            {
+                PrinterState snap = state();
+                for (auto& cb : _callbacks) cb(snap);
+            }
             break;
 
         case MQTT_EVENT_DATA:
-            if (ev->data && ev->data_len > 0) {
+            if (ev->data && ev->data_len > 0)
                 parse_report(ev->data, ev->data_len);
-            }
             break;
 
         case MQTT_EVENT_ERROR:
             ESP_LOGE(TAG, "[%s] MQTT error", _serial.c_str());
             break;
 
-        default:
-            break;
+        default: break;
     }
 }
 
@@ -132,20 +139,22 @@ void BambuClient::parse_report(const char* payload, int len) {
     cJSON* root = cJSON_ParseWithLength(payload, len);
     if (!root) return;
 
-    cJSON* print = cJSON_GetObjectItem(root, "print");
-    if (print) parse_print(print);
-
-    cJSON* ams = cJSON_GetObjectItem(root, "ams");
-    if (ams) parse_ams(ams);
+    {
+        std::lock_guard<std::mutex> lock(_state_mutex);  // FIX C5
+        cJSON* print = cJSON_GetObjectItem(root, "print");
+        if (print) parse_print(print);
+        cJSON* ams = cJSON_GetObjectItem(root, "ams");
+        if (ams) parse_ams(ams);
+        _state.last_seen_ms = esp_timer_get_time() / 1000;
+    }
 
     cJSON_Delete(root);
 
-    _state.last_seen_ms = esp_timer_get_time() / 1000;
-    if (_callback) _callback(_state);
+    PrinterState snap = state();
+    for (auto& cb : _callbacks) cb(snap);
 }
 
 void BambuClient::parse_print(cJSON* p) {
-    // Status
     const char* st = json_str(p, "gcode_state");
     if      (strcmp(st, "IDLE")    == 0) _state.status = PrinterStatus::IDLE;
     else if (strcmp(st, "RUNNING") == 0) _state.status = PrinterStatus::PRINTING;
@@ -153,32 +162,28 @@ void BambuClient::parse_print(cJSON* p) {
     else if (strcmp(st, "FINISH")  == 0) _state.status = PrinterStatus::FINISHED;
     else if (strcmp(st, "FAILED")  == 0) _state.status = PrinterStatus::FAILED;
 
-    // Progress & ETA
-    _state.progress_pct   = json_int(p, "mc_percent");
-    _state.remaining_sec  = json_int(p, "mc_remaining_time") * 60; // Bambu sends minutes
-    _state.layer_cur      = json_int(p, "layer_num");
-    _state.layer_total    = json_int(p, "total_layer_num");
-    _state.subtask_name   = json_str(p, "subtask_name");
-    _state.gcode_file     = json_str(p, "gcode_file");
+    _state.progress_pct  = json_int(p, "mc_percent");
+    _state.remaining_sec = json_int(p, "mc_remaining_time") * 60;
+    _state.layer_cur     = json_int(p, "layer_num");
+    _state.layer_total   = json_int(p, "total_layer_num");
+    _state.subtask_name  = json_str(p, "subtask_name");
+    _state.gcode_file    = json_str(p, "gcode_file");
 
-    // Temperatures
     _state.nozzle_temp   = json_float(p, "nozzle_temper");
     _state.nozzle_target = json_float(p, "nozzle_target_temper");
     _state.bed_temp      = json_float(p, "bed_temper");
     _state.bed_target    = json_float(p, "bed_target_temper");
     _state.chamber_temp  = json_float(p, "chamber_temper");
 
-    // Fans (Bambu reports 0-15, scale to %)
     auto fan_pct = [](int v) { return (v * 100) / 15; };
     _state.fan_part_cooling = fan_pct(json_int(p, "cooling_fan_speed"));
     _state.fan_aux          = fan_pct(json_int(p, "big_fan1_speed"));
     _state.fan_chamber      = fan_pct(json_int(p, "big_fan2_speed"));
 
-    // Speed
-    _state.print_speed_pct = json_int(p, "spd_lvl", 1) == 1 ? 50  :
-                             json_int(p, "spd_lvl", 2) == 2 ? 100 :
-                             json_int(p, "spd_lvl", 3) == 3 ? 124 : 166;
-    // Lights
+    // FIX M3: correct spd_lvl parsing — single read, correct default
+    int spd = json_int(p, "spd_lvl", 2);
+    _state.print_speed_pct = spd == 1 ? 50 : spd == 2 ? 100 : spd == 3 ? 124 : 166;
+
     cJSON* lights = cJSON_GetObjectItem(p, "lights_report");
     if (lights && cJSON_IsArray(lights)) {
         cJSON* l;
@@ -194,7 +199,6 @@ void BambuClient::parse_print(cJSON* p) {
 void BambuClient::parse_ams(cJSON* ams_obj) {
     cJSON* ams_arr = cJSON_GetObjectItem(ams_obj, "ams");
     if (!ams_arr || !cJSON_IsArray(ams_arr)) return;
-
     _state.ams_trays.clear();
 
     cJSON* tray_json;
@@ -206,13 +210,13 @@ void BambuClient::parse_ams(cJSON* ams_obj) {
 
         cJSON* slots = cJSON_GetObjectItem(tray_json, "tray");
         if (slots && cJSON_IsArray(slots)) {
-            cJSON* slot_json;
-            cJSON_ArrayForEach(slot_json, slots) {
+            cJSON* s;
+            cJSON_ArrayForEach(s, slots) {
                 AmsSlot slot;
-                slot.id         = json_int(slot_json, "id");
-                slot.color      = json_str(slot_json, "tray_color");
-                slot.material   = json_str(slot_json, "tray_type");
-                slot.remain_pct = json_int(slot_json, "remain", -1);
+                slot.id         = json_int(s, "id");
+                slot.color      = json_str(s, "tray_color");
+                slot.material   = json_str(s, "tray_type");
+                slot.remain_pct = json_int(s, "remain", -1);
                 tray.slots.push_back(slot);
             }
         }
@@ -230,10 +234,15 @@ esp_err_t BambuClient::publish(const char* json) {
     return id >= 0 ? ESP_OK : ESP_FAIL;
 }
 
+PrinterState BambuClient::state() const {
+    std::lock_guard<std::mutex> lock(_state_mutex);  // FIX C5
+    return _state;
+}
+
 esp_err_t BambuClient::set_light(bool chamber, bool on) {
     const char* node = chamber ? "chamber_light" : "work_light";
     const char* mode = on      ? "on"            : "off";
-    char buf[128];
+    char buf[200];
     snprintf(buf, sizeof(buf),
         "{\"system\":{\"sequence_id\":\"0\",\"command\":\"ledctrl\","
         "\"led_node\":\"%s\",\"led_mode\":\"%s\","
@@ -263,6 +272,11 @@ esp_err_t BambuClient::stop_print() {
     return publish("{\"print\":{\"sequence_id\":\"0\",\"command\":\"stop\"}}");
 }
 
+esp_err_t BambuClient::emergency_stop() {
+    // Bambu uses stop command for emergency — same as stop_print
+    return stop_print();
+}
+
 esp_err_t BambuClient::set_fan(const char* fan, int speed) {
     char buf[128];
     snprintf(buf, sizeof(buf),
@@ -272,13 +286,44 @@ esp_err_t BambuClient::set_fan(const char* fan, int speed) {
 }
 
 esp_err_t BambuClient::set_temperature(const char* target, float temp) {
+    char gcode[32];
+    if (strcmp(target, "bed") == 0)
+        snprintf(gcode, sizeof(gcode), "M140 S%.0f\\n", temp);
+    else
+        snprintf(gcode, sizeof(gcode), "M104 S%.0f\\n", temp);
+
     char buf[128];
     snprintf(buf, sizeof(buf),
         "{\"print\":{\"sequence_id\":\"0\",\"command\":\"gcode_line\","
-        "\"param\":\"M104 S%.0f\\n\"}}", temp); // simplified; bed uses M140
+        "\"param\":\"%s\"}}", gcode);
     return publish(buf);
 }
 
-PrinterState BambuClient::state() const {
-    return _state;
+esp_err_t BambuClient::home_axis(bool x, bool y, bool z) {
+    char axes[8] = {};
+    if (x) strcat(axes, " X");
+    if (y) strcat(axes, " Y");
+    if (z) strcat(axes, " Z");
+    char buf[128];
+    snprintf(buf, sizeof(buf),
+        "{\"print\":{\"sequence_id\":\"0\",\"command\":\"gcode_line\","
+        "\"param\":\"G28%s\\n\"}}", axes);
+    return publish(buf);
+}
+
+esp_err_t BambuClient::move_axis(char axis, float dist_mm, float speed_mmps) {
+    char buf[200];
+    snprintf(buf, sizeof(buf),
+        "{\"print\":{\"sequence_id\":\"0\",\"command\":\"gcode_line\","
+        "\"param\":\"G91\\nG1 %c%.2f F%.0f\\nG90\\n\"}}",
+        axis, dist_mm, speed_mmps * 60.f);
+    return publish(buf);
+}
+
+esp_err_t BambuClient::send_gcode(const char* gcode) {
+    char buf[256];
+    snprintf(buf, sizeof(buf),
+        "{\"print\":{\"sequence_id\":\"0\",\"command\":\"gcode_line\","
+        "\"param\":\"%s\\n\"}}", gcode);
+    return publish(buf);
 }

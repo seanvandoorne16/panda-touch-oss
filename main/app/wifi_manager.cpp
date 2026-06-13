@@ -81,7 +81,7 @@ esp_err_t WifiManager::disconnect() {
 void WifiManager::set_state(WifiState s, const std::string& ip) {
     _state = s;
     _ip    = ip;
-    if (_callback) _callback(s, ip);
+    for (auto& cb : _callbacks) cb(s, ip);  // FIX H3: notify all observers
 }
 
 void WifiManager::event_handler(void* arg, esp_event_base_t base,

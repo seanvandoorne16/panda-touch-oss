@@ -13,8 +13,8 @@
 
 static const char* TAG = "main";
 
-// Global brightness — used by sleep_manager to restore after wake
-extern uint8_t g_brightness;
+// FIX M4: brightness lives here, not in a UI file
+uint8_t g_brightness = 80;
 
 // LVGL tick + sleep tick task — runs every 5 ms on core 1
 static void lvgl_task(void*) {
@@ -58,10 +58,10 @@ extern "C" void app_main(void) {
     // 5. WiFi
     ESP_ERROR_CHECK(WifiManager::instance().init());
 
-    // 6. SNTP clock (fixes issue #196) — starts after WiFi connects
-    WifiManager::instance().on_state_change([](WifiState s, const std::string&) {
+    // 6. FIX H3: use add_state_listener (multi-observer) instead of on_state_change
+    WifiManager::instance().add_state_listener([](WifiState s, const std::string&) {
         if (s == WifiState::CONNECTED) {
-            ClockManager::instance().init();
+            ClockManager::instance().init();  // SNTP after WiFi up (#196)
         } else if (s == WifiState::FAILED) {
             ESP_LOGW(TAG, "WiFi failed, showing setup screen");
             UiManager::instance().lock();

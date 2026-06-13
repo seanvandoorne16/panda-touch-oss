@@ -183,8 +183,10 @@ void ScreenPrinter::show(std::shared_ptr<BambuClient> client) {
     lv_scr_load(s_screen);
 
     // Hook live updates
-    client->on_update([](const PrinterState& s) {
+    client->add_update_listener([](const PrinterState& s) {
+        UiManager::instance().lock();
         ScreenPrinter::refresh(s);
+        UiManager::instance().unlock();
     });
 
     refresh(st);
@@ -231,11 +233,16 @@ void ScreenPrinter::refresh(const PrinterState& st) {
             ? LV_SYMBOL_PLAY  " Resume"
             : LV_SYMBOL_PAUSE " Pause");
 
-    // Disable controls when idle/offline
+    // FIX M1: correct LVGL enable/disable API
     bool active = (st.status == PrinterStatus::PRINTING ||
                    st.status == PrinterStatus::PAUSED);
-    lv_obj_set_state(s_pause_btn, active ? LV_STATE_DEFAULT : LV_STATE_DISABLED, !active);
-    lv_obj_set_state(s_stop_btn,  active ? LV_STATE_DEFAULT : LV_STATE_DISABLED, !active);
+    if (active) {
+        lv_obj_clear_state(s_pause_btn, LV_STATE_DISABLED);
+        lv_obj_clear_state(s_stop_btn,  LV_STATE_DISABLED);
+    } else {
+        lv_obj_add_state(s_pause_btn, LV_STATE_DISABLED);
+        lv_obj_add_state(s_stop_btn,  LV_STATE_DISABLED);
+    }
 
     UiManager::instance().unlock();
 }

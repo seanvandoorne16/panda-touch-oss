@@ -74,5 +74,10 @@ void ThumbnailFetcher::fetch(const std::string& ip,
                               const std::string& subtask_name,
                               ThumbnailCallback  cb) {
     auto* args = new FetchArgs{ip, access_code, subtask_name, cb};
-    xTaskCreate(fetch_task, "thumb", 8192, args, 3, nullptr);
+    // FIX H4: check task creation result to avoid FetchArgs leak
+    if (xTaskCreate(fetch_task, "thumb", 8192, args, 3, nullptr) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create thumbnail task");
+        if (args->cb) args->cb({});
+        delete args;
+    }
 }

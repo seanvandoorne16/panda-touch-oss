@@ -63,7 +63,9 @@ static void on_connect_clicked(lv_event_t* e) {
     lv_obj_add_flag(s_connect_btn, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_spinner, LV_OBJ_FLAG_HIDDEN);
 
-    WifiManager::instance().on_state_change(on_wifi_state);
+    // FIX H3: clear main's listeners first, then add ours; restored on ScreenHome::create()
+    WifiManager::instance().clear_state_listeners();
+    WifiManager::instance().add_state_listener(on_wifi_state);
 
     ConfigManager::instance().save_wifi({ssid, pass});
     WifiManager::instance().connect(ssid, pass);

@@ -11,8 +11,8 @@ static const char* TAG = "settings";
 
 static lv_obj_t* s_screen = nullptr;
 
-// Forward declaration of global brightness so sleep_manager can restore it
-uint8_t g_brightness = 80;
+// FIX M4: g_brightness defined in main.cpp, not here
+extern uint8_t g_brightness;
 
 static lv_obj_t* section_label(lv_obj_t* parent, const char* text) {
     lv_obj_t* lbl = lv_label_create(parent);

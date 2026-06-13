@@ -43,7 +43,7 @@ void ScreenSaver::show(const PrinterState& state) {
     lv_obj_align(s_clock, LV_ALIGN_TOP_MID, 0, 40);
     lv_label_set_text(s_clock, ClockManager::instance().time_str().c_str());
 
-    s_clock_timer = lv_timer_create(clock_tick, 30000, nullptr);
+    s_clock_timer = lv_timer_create(clock_tick, 60000, nullptr);  // FIX M5: 60s matches HH:MM display
 
     // File name
     s_file = lv_label_create(s_screen);

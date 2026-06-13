@@ -2,17 +2,20 @@
 #include <string>
 #include <functional>
 #include <memory>
+#include <mutex>
+#include <vector>
 #include "printer_state.hpp"
 #include "esp_err.h"
 
 using PrinterStateCallback = std::function<void(const PrinterState&)>;
 
-// One BambuClient per printer.  Communicates via MQTT over TLS on port 8883.
+// One BambuClient per printer. Communicates via MQTT over TLS on port 8883.
 class BambuClient {
 public:
     explicit BambuClient(const std::string& serial,
                          const std::string& ip,
-                         const std::string& access_code);
+                         const std::string& access_code,
+                         const std::string& name = "");
     ~BambuClient();
 
     esp_err_t connect();
@@ -21,18 +24,22 @@ public:
 
     // Commands
     esp_err_t set_light(bool chamber, bool on);
-    esp_err_t set_speed(int pct);       // 50/100/124/166
+    esp_err_t set_speed(int pct);
     esp_err_t pause_print();
     esp_err_t resume_print();
     esp_err_t stop_print();
-    esp_err_t set_fan(const char* fan, int speed); // "cooling_fan","big_fan1","big_fan2"
-    esp_err_t set_temperature(const char* target, float temp); // "nozzle"/"bed"
+    esp_err_t set_fan(const char* fan, int speed);
+    esp_err_t set_temperature(const char* target, float temp);
+    esp_err_t home_axis(bool x, bool y, bool z);
+    esp_err_t move_axis(char axis, float dist_mm, float speed_mmps);
+    esp_err_t emergency_stop();
+    esp_err_t send_gcode(const char* gcode);
 
-    // Current state snapshot (thread-safe copy)
+    // Thread-safe state snapshot (FIX C5: mutex protected)
     PrinterState state() const;
 
-    // Register callback (called from MQTT task, so be quick or dispatch)
-    void on_update(PrinterStateCallback cb) { _callback = cb; }
+    // FIX H3: multi-observer — registering doesn't drop previous callbacks
+    void add_update_listener(PrinterStateCallback cb);
 
 private:
     static void mqtt_event_handler(void* arg, esp_event_base_t base,
@@ -46,12 +53,14 @@ private:
     std::string _serial;
     std::string _ip;
     std::string _access_code;
+    std::string _client_id;   // FIX C2: stable storage for MQTT client_id
 
     void*  _mqtt_handle = nullptr;
     bool   _connected   = false;
 
-    mutable PrinterState _state;
-    PrinterStateCallback _callback;
+    mutable std::mutex           _state_mutex;  // FIX C5: data race guard
+    PrinterState                 _state;
+    std::vector<PrinterStateCallback> _callbacks;
 
     std::string _report_topic;
     std::string _request_topic;

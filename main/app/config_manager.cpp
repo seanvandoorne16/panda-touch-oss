@@ -29,7 +29,11 @@ static esp_err_t nvs_get_str_alloc(nvs_handle_t h, const char* key, std::string&
     esp_err_t err = nvs_get_str(h, key, nullptr, &len);
     if (err != ESP_OK) return err;
     out.resize(len);
-    return nvs_get_str(h, key, out.data(), &len);
+    err = nvs_get_str(h, key, out.data(), &len);
+    // FIX M7: nvs_get_str includes null terminator in len — strip it
+    if (err == ESP_OK && !out.empty() && out.back() == '\0')
+        out.resize(out.size() - 1);
+    return err;
 }
 
 // ── WiFi ─────────────────────────────────────────────────────────────────────
