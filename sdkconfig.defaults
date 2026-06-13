@@ -42,3 +42,6 @@ CONFIG_FREERTOS_HZ=1000
 
 # Task watchdog
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+
+# OTA: terugvallen op vorige firmware als de nieuwe crasht bij opstarten
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y

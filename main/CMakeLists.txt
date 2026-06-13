@@ -8,6 +8,7 @@ idf_component_register(
         "app/sleep_manager.cpp"
         "app/clock_manager.cpp"
         "app/thumbnail_fetcher.cpp"
+        "app/ota_manager.cpp"
         "ui/ui_manager.cpp"
         "ui/screen_wifi.cpp"
         "ui/screen_home.cpp"
@@ -15,6 +16,7 @@ idf_component_register(
         "ui/screen_ams.cpp"
         "ui/screen_settings.cpp"
         "ui/screen_screensaver.cpp"
+        "ui/screen_ota.cpp"
     INCLUDE_DIRS
         "."
         "app"
@@ -33,6 +35,6 @@ idf_component_register(
         spiffs
         json
         lvgl
-        esp_tls
+        esp_https_ota
         esp_sntp
 )

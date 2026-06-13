@@ -1,9 +1,11 @@
 #include "screen_settings.hpp"
 #include "screen_home.hpp"
+#include "screen_ota.hpp"
 #include "ui_manager.hpp"
 #include "config_manager.hpp"
 #include "sleep_manager.hpp"
 #include "clock_manager.hpp"
+#include "ota_manager.hpp"
 #include "esp_log.h"
 #include <cstdio>
 
@@ -187,6 +189,32 @@ void ScreenSettings::show() {
 
     lv_obj_t* lock_sw = lv_switch_create(lock_row);
     lv_obj_add_state(lock_sw, LV_STATE_CHECKED); // on by default
+
+    // ── Firmware ──────────────────────────────────────────────────────────────
+    section_label(cont, "Firmware");
+
+    lv_obj_t* fw_row = lv_obj_create(cont);
+    lv_obj_set_size(fw_row, LCD_W - 72, 50);
+    lv_obj_set_style_bg_opa(fw_row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(fw_row, 0, 0);
+    lv_obj_set_flex_flow(fw_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(fw_row, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    char ver_buf[32];
+    snprintf(ver_buf, sizeof(ver_buf), "Versie  v%s", OtaManager::current_version());
+    row_label(fw_row, ver_buf);
+
+    lv_obj_t* ota_btn = lv_btn_create(fw_row);
+    lv_obj_set_size(ota_btn, 200, 38);
+    lv_obj_set_style_bg_color(ota_btn, lv_palette_main(LV_PALETTE_GREEN), 0);
+    lv_obj_add_event_cb(ota_btn, [](lv_event_t*) {
+        ScreenSettings::destroy();
+        ScreenOta::show();
+    }, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t* ota_lbl = lv_label_create(ota_btn);
+    lv_label_set_text(ota_lbl, LV_SYMBOL_DOWNLOAD "  Bijwerken");
+    lv_obj_center(ota_lbl);
 
     lv_scr_load(s_screen);
 }
