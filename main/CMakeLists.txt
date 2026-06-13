@@ -1,0 +1,30 @@
+idf_component_register(
+    SRCS
+        "main.cpp"
+        "app/config_manager.cpp"
+        "app/wifi_manager.cpp"
+        "app/bambu_client.cpp"
+        "app/battery_monitor.cpp"
+        "ui/ui_manager.cpp"
+        "ui/screen_wifi.cpp"
+        "ui/screen_home.cpp"
+        "ui/screen_printer.cpp"
+    INCLUDE_DIRS
+        "."
+        "app"
+        "ui"
+    REQUIRES
+        nvs_flash
+        esp_wifi
+        esp_event
+        esp_netif
+        mqtt
+        esp_tls
+        esp_lcd
+        esp_lcd_touch_gt911
+        driver
+        esp_adc
+        spiffs
+        json
+        lvgl
+)
